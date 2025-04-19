@@ -1,0 +1,79 @@
+
+services:
+  emailserver:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: emailserver
+    restart: unless-stopped
+    ports:
+      - "25:25"     # SMTP port
+      - "8080:8080" # Web API port
+    volumes:
+      - email-data:/var/lib/emailserver/emails
+      - ./config.yaml:/etc/emailserver/config.yaml
+    depends_on:
+      - postgres
+      - liquibase
+    networks:
+      - email-network
+    environment:
+      - EMAILSERVER_DB_HOST=postgres
+      - EMAILSERVER_DB_PORT=5432
+      - EMAILSERVER_DB_USER=emailserver
+      - EMAILSERVER_DB_PASSWORD=securepassword
+      - EMAILSERVER_DB_NAME=emailserver
+      - EMAILSERVER_DOMAIN=example.com
+      - EMAILSERVER_JWT_SECRET=your-very-secure-jwt-secret-key
+
+  postgres:
+    image: postgres:15-alpine
+    container_name: emailserver-postgres
+    restart: unless-stopped
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+    networks:
+      - email-network
+    environment:
+      - POSTGRES_USER=emailserver
+      - POSTGRES_PASSWORD=securepassword
+      - POSTGRES_DB=emailserver
+
+  liquibase:
+    image: liquibase/liquibase:4.23
+    container_name: emailserver-liquibase
+    volumes:
+      - ./db:/liquibase/changelog
+    networks:
+      - email-network
+    depends_on:
+      - postgres
+    command: >
+      --changelog-file=db.xml
+      --url=jdbc:postgresql://postgres:5432/emailserver
+      --username=emailserver
+      --password=securepassword
+      update
+      
+
+  adminer:
+    image: adminer:latest
+    container_name: emailserver-adminer
+    restart: unless-stopped
+    ports:
+      - "8081:8080"
+    networks:
+      - email-network
+    environment:
+      - ADMINER_DEFAULT_SERVER=postgres
+      - ADMINER_DESIGN=pappu687
+
+networks:
+  email-network:
+    driver: bridge
+
+volumes:
+  postgres-data:
+  email-data:

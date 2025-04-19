@@ -1,0 +1,162 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<databaseChangeLog
+    xmlns="http://www.liquibase.org/xml/ns/dbchangelog"
+    xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+    xsi:schemaLocation="http://www.liquibase.org/xml/ns/dbchangelog
+                      http://www.liquibase.org/xml/ns/dbchangelog/dbchangelog-4.5.xsd">
+    
+    <changeSet id="1" author="emailserver">
+        <!-- Users table -->
+        <createTable tableName="users">
+            <column name="id" type="uuid">
+                <constraints primaryKey="true" nullable="false"/>
+            </column>
+            <column name="email" type="varchar(255)">
+                <constraints unique="true" nullable="false"/>
+            </column>
+            <column name="password_hash" type="varchar(255)">
+                <constraints nullable="false"/>
+            </column>
+            <column name="is_active" type="boolean" defaultValueBoolean="true">
+                <constraints nullable="false"/>
+            </column>
+            <column name="created_at" type="timestamp with time zone">
+                <constraints nullable="false"/>
+            </column>
+            <column name="updated_at" type="timestamp with time zone">
+                <constraints nullable="false"/>
+            </column>
+            <column name="is_admin" type="boolean" defaultValueBoolean="false">
+                <constraints nullable="false"/>
+            </column>
+            <column name="external_domain" type="boolean" defaultValueBoolean="false">
+                <constraints nullable="false"/>
+            </column>
+        </createTable>
+        
+        <!-- Mailboxes table -->
+        <createTable tableName="mailboxes">
+            <column name="id" type="uuid">
+                <constraints primaryKey="true" nullable="false"/>
+            </column>
+            <column name="address" type="varchar(255)">
+                <constraints unique="true" nullable="false"/>
+            </column>
+            <column name="user_id" type="uuid">
+                <constraints nullable="false" foreignKeyName="fk_mailbox_user" references="users(id)"/>
+            </column>
+            <column name="created_at" type="timestamp with time zone">
+                <constraints nullable="false"/>
+            </column>
+            <column name="updated_at" type="timestamp with time zone">
+                <constraints nullable="false"/>
+            </column>
+        </createTable>
+        
+        <!-- Emails table -->
+        <createTable tableName="emails">
+            <column name="id" type="uuid">
+                <constraints primaryKey="true" nullable="false"/>
+            </column>
+            <column name="from_address" type="varchar(255)">
+                <constraints nullable="false"/>
+            </column>
+            <column name="to_address" type="varchar(255)">
+                <constraints nullable="false"/>
+            </column>
+            <column name="subject" type="text">
+                <constraints nullable="false"/>
+            </column>
+            <column name="body" type="text">
+                <constraints nullable="false"/>
+            </column>
+            <column name="created_at" type="timestamp with time zone">
+                <constraints nullable="false"/>
+            </column>
+            <column name="read_at" type="timestamp with time zone">
+                <constraints nullable="true"/>
+            </column>
+            <column name="mailbox_id" type="uuid">
+                <constraints nullable="false" foreignKeyName="fk_email_mailbox" references="mailboxes(id)"/>
+            </column>
+        </createTable>
+        
+        <!-- Permission requests table -->
+        <createTable tableName="permission_requests">
+            <column name="id" type="uuid">
+                <constraints primaryKey="true" nullable="false"/>
+            </column>
+            <column name="requestor_email" type="varchar(255)">
+                <constraints nullable="false"/>
+            </column>
+            <column name="target_mailbox" type="varchar(255)">
+                <constraints nullable="false"/>
+            </column>
+            <column name="token" type="varchar(255)">
+                <constraints nullable="false" unique="true"/>
+            </column>
+            <column name="created_at" type="timestamp with time zone">
+                <constraints nullable="false"/>
+            </column>
+            <column name="approved_at" type="timestamp with time zone">
+                <constraints nullable="true"/>
+            </column>
+            <column name="expires_at" type="timestamp with time zone">
+                <constraints nullable="false"/>
+            </column>
+        </createTable>
+        
+        <!-- Indexes -->
+        <createIndex tableName="users" indexName="idx_users_email">
+            <column name="email"/>
+        </createIndex>
+        
+        <createIndex tableName="mailboxes" indexName="idx_mailboxes_address">
+            <column name="address"/>
+        </createIndex>
+        
+        <createIndex tableName="mailboxes" indexName="idx_mailboxes_user_id">
+            <column name="user_id"/>
+        </createIndex>
+        
+        <createIndex tableName="emails" indexName="idx_emails_mailbox_id">
+            <column name="mailbox_id"/>
+        </createIndex>
+        
+        <createIndex tableName="emails" indexName="idx_emails_created_at">
+            <column name="created_at"/>
+        </createIndex>
+        
+        <createIndex tableName="permission_requests" indexName="idx_permission_requests_target">
+            <column name="target_mailbox"/>
+        </createIndex>
+        
+        <createIndex tableName="permission_requests" indexName="idx_permission_requests_token">
+            <column name="token"/>
+        </createIndex>
+    </changeSet>
+    
+    <changeSet id="2" author="emailserver">
+        <!-- Create default admin user -->
+        <insert tableName="users">
+            <column name="id" value="00000000-0000-0000-0000-000000000001"/>
+            <column name="email" value="admin@example.com"/>
+            <!-- Default password is 'admin123' - change this in production! -->
+            <column name="password_hash" value="$2a$10$rNvkKY.WG1VE6RwC8QZXsOSJ4wV8LqwfT0TK7vzVOXGqhFq4Jz4GW"/>
+            <column name="is_active" valueBoolean="true"/>
+            <column name="created_at" valueDate="now()"/>
+            <column name="updated_at" valueDate="now()"/>
+            <column name="is_admin" valueBoolean="true"/>
+            <column name="external_domain" valueBoolean="false"/>
+        </insert>
+        
+        <!-- Create admin mailbox -->
+        <insert tableName="mailboxes">
+            <column name="id" value="00000000-0000-0000-0000-000000000001"/>
+            <column name="address" value="admin@example.com"/>
+            <column name="user_id" value="00000000-0000-0000-0000-000000000001"/>
+            <column name="created_at" valueDate="now()"/>
+            <column name="updated_at" valueDate="now()"/>
+        </insert>
+    </changeSet>
+</databaseChangeLog>

@@ -1,0 +1,37 @@
+# SMTP Server Configuration
+smtp:
+  host: "0.0.0.0"  # Listen on all interfaces
+  port: 25         # Standard SMTP port
+
+# Web API Configuration
+web:
+  host: "0.0.0.0"  # Listen on all interfaces
+  port: 8080       # Web API port
+
+# Domain Configuration
+domain: "example.com"  # Your email domain
+
+# Database Configuration
+db:
+  host: "postgres"     # Use container name in Docker
+  port: 5432           # Default PostgreSQL port
+  user: "emailserver"  # Database user
+  password: "securepassword"  # Database password
+  name: "emailserver"  # Database name
+  sslmode: "disable"   # SSL mode for database connection
+
+# Trusted Domains (emails from these domains are always accepted)
+trusted_domains:
+  - "trusted1.com"
+  - "trusted2.com"
+
+# JWT Secret for authentication
+jwt_secret: "your-very-secure-jwt-secret-key"
+
+# TLS Configuration (optional)
+tls:
+  cert_file: "/etc/certs/server.crt"
+  key_file: "/etc/certs/server.key"
+
+# Email Storage Path
+email_storage_path: "/var/lib/emailserver/emails"
