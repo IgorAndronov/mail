@@ -13,7 +13,7 @@ domain: "example.com"  # Your email domain
 
 # Database Configuration
 db:
-  host: "postgres"     # Use container name in Docker
+  host: localhost     # Use container name in Docker
   port: 5432           # Default PostgreSQL port
   user: "emailserver"  # Database user
   password: "securepassword"  # Database password
