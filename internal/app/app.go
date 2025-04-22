@@ -1,173 +1,128 @@
 package app
 
 import (
-	"crypto/tls"
-	"database/sql"
-	"fmt"
+	"context"
 	"log"
+	"net/http"
+	"os"
+	"os/signal"
+	"strconv"
+	"syscall"
 	"time"
 
-	"github.com/emersion/go-smtp"
-	"github.com/gin-gonic/gin"
-	"github.com/golang-jwt/jwt/v5"
-	"github.com/jmoiron/sqlx"
-	_ "github.com/lib/pq"
-
+	"github.com/yourusername/emailserver/internal/api"
+	"github.com/yourusername/emailserver/internal/auth"
 	"github.com/yourusername/emailserver/internal/config"
-	"github.com/yourusername/emailserver/internal/db"
-	"github.com/yourusername/emailserver/internal/models"
-	"github.com/yourusername/emailserver/internal/smtpserver"
+	"github.com/yourusername/emailserver/internal/email"
+	"github.com/yourusername/emailserver/internal/storage"
 )
 
-/* ------------------------------------------------------------------
-   App struct — runtime container
--------------------------------------------------------------------*/
-
+// App represents the main application
 type App struct {
-	// configuration & infrastructure
-	cfg        config.Config
-	db         *sqlx.DB
-	smtpServer *smtp.Server
-	webRouter  *gin.Engine
-
-	// cached permission matrix
-	allowedSenders map[string]map[string]bool // target → sender → bool
+	cfg             config.Config
+	db              *storage.Database
+	fileStorage     *storage.FileStorage
+	authService     *auth.Service
+	smtpServer      *email.SMTPServer
+	outboundService *email.OutboundService
+	httpServer      *http.Server
 }
 
-/* ------------------------------------------------------------------
-   Public getters (required by smtpserver.AppAPI)
--------------------------------------------------------------------*/
-
-func (a *App) GetDB() interface {
-	Get(any, string, ...any) error
-	Select(any, string, ...any) error
-	Exec(string, ...any) (sql.Result, error)
-} {
-	return a.db
-}
-func (a *App) GetConfig() config.Config { return a.cfg }
-
-/* ------------------------------------------------------------------
-   Methods used by other layers
--------------------------------------------------------------------*/
-
-func (a *App) SetWebRouter(r *gin.Engine) { a.webRouter = r }
-
-func (a *App) AppendTrustedDomain(d string) {
-	a.cfg.TrustedDomains = append(a.cfg.TrustedDomains, d)
-}
-func (a *App) RemoveTrustedDomain(d string) bool {
-	for i, v := range a.cfg.TrustedDomains {
-		if v == d {
-			a.cfg.TrustedDomains = append(a.cfg.TrustedDomains[:i], a.cfg.TrustedDomains[i+1:]...)
-			return true
-		}
-	}
-	return false
-}
-
-/* permission helpers for smtpserver.Session */
-func (a *App) IsEmailAllowed(from, to string) bool {
-	return a.allowedSenders[to][from]
-}
-func (a *App) AddAllowedSender(target, sender string) {
-	if a.allowedSenders[target] == nil {
-		a.allowedSenders[target] = map[string]bool{}
-	}
-	a.allowedSenders[target][sender] = true
-}
-
-/* JWT helper for login handler */
-func (a *App) GenerateJWT(u models.User) (string, error) {
-	t := jwt.NewWithClaims(jwt.SigningMethodHS256, jwt.MapClaims{
-		"user_id":  u.ID,
-		"email":    u.Email,
-		"is_admin": u.IsAdmin,
-		"exp":      time.Now().Add(24 * time.Hour).Unix(),
-	})
-	return t.SignedString([]byte(a.cfg.JWTSecret))
-}
-
-/* ------------------------------------------------------------------
-   Init / Run / Close lifecycle
--------------------------------------------------------------------*/
-
-func (a *App) Init() error {
-	/* 1. configuration */
-	c, err := config.Load()
+// New creates a new application instance
+func New(configFile string) (*App, error) {
+	// Load configuration
+	cfg, err := config.LoadConfig(configFile)
 	if err != nil {
-		return err
+		return nil, err
 	}
-	a.cfg = c
 
-	/* 2. database */
-	dsn := db.DSN(c.DB.Host, c.DB.Port, c.DB.User, c.DB.Password, c.DB.DBName, c.DB.SSLMode)
-	a.db, err = db.Connect(dsn)
+	// Initialize database
+	db, err := storage.NewDatabase(cfg.DB)
 	if err != nil {
-		return err
+		return nil, err
 	}
 
-	/* 3. allowed senders cache */
-	a.loadAllowedSenders()
+	// Initialize file storage
+	fileStorage, err := storage.NewFileStorage(cfg.EmailStoragePath)
+	if err != nil {
+		return nil, err
+	}
 
-	/* 4. SMTP server */
-	a.initSMTP()
-	return nil
+	// Initialize authentication service
+	authService := auth.NewService(cfg.JWTSecret)
+
+	// Initialize outbound email service
+	outboundService := email.NewOutboundService(cfg, cfg.OwnDomains)
+
+	// Initialize SMTP server
+	smtpServer := email.NewSMTPServer(cfg, db, fileStorage, outboundService)
+
+	// Initialize API handlers and middleware
+	handler := api.NewHandler(db, fileStorage, authService, outboundService, cfg.Domain)
+	middleware := api.NewMiddleware(authService)
+
+	// Set up router
+	router := api.SetupRouter(handler, middleware)
+
+	// Initialize HTTP server
+	httpServer := &http.Server{
+		Addr:    cfg.WebHost + ":" + strconv.Itoa(cfg.WebPort),
+		Handler: router,
+	}
+
+	return &App{
+		cfg:             cfg,
+		db:              db,
+		fileStorage:     fileStorage,
+		authService:     authService,
+		smtpServer:      smtpServer,
+		outboundService: outboundService,
+		httpServer:      httpServer,
+	}, nil
 }
 
+// Run starts the application
 func (a *App) Run() error {
+	// Start SMTP server in a goroutine
 	go func() {
-		log.Printf("SMTP listening on %s", a.smtpServer.Addr)
-		if err := a.smtpServer.ListenAndServe(); err != nil {
-			log.Fatalf("smtp: %v", err)
+		if err := a.smtpServer.Start(); err != nil && err != http.ErrServerClosed {
+			log.Fatalf("SMTP server error: %v\n", err)
 		}
 	}()
-	return nil
-}
 
-func (a *App) Close() error {
-	_ = a.smtpServer.Close()
-	// Gin has no explicit shutdown here (router runs in main goroutine)
-	return nil
-}
-
-/* ------------------------------------------------------------------
-   internal helpers
--------------------------------------------------------------------*/
-
-func (a *App) loadAllowedSenders() {
-	a.allowedSenders = map[string]map[string]bool{}
-	var prs []models.PermissionRequest
-	err := a.db.Select(&prs,
-		`SELECT * FROM permission_requests WHERE approved_at IS NOT NULL AND expires_at > NOW()`)
-	if err != nil {
-		log.Printf("load permission_requests: %v", err)
-		return
-	}
-	for _, pr := range prs {
-		if a.allowedSenders[pr.TargetMailbox] == nil {
-			a.allowedSenders[pr.TargetMailbox] = map[string]bool{}
+	// Start HTTP server in a goroutine
+	go func() {
+		if err := a.httpServer.ListenAndServe(); err != nil && err != http.ErrServerClosed {
+			log.Fatalf("HTTP server error: %v\n", err)
 		}
-		a.allowedSenders[pr.TargetMailbox][pr.RequestorEmail] = true
-	}
-}
+	}()
 
-func (a *App) initSMTP() {
-	be := smtpserver.NewBackend(a)
-	s := smtp.NewServer(be)
-	s.Addr = fmt.Sprintf("%s:%d", a.cfg.SMTPHost, a.cfg.SMTPPort)
-	s.Domain = a.cfg.Domain
-	s.ReadTimeout, s.WriteTimeout = 10*time.Second, 10*time.Second
-	s.MaxMessageBytes, s.MaxRecipients = 1<<20, 50
-	s.AllowInsecureAuth = true
+	// Wait for interrupt signal to gracefully shut down the servers
+	quit := make(chan os.Signal, 1)
+	signal.Notify(quit, syscall.SIGINT, syscall.SIGTERM)
+	<-quit
 
-	if a.cfg.CertFile != "" && a.cfg.KeyFile != "" {
-		if cert, err := tls.LoadX509KeyPair(a.cfg.CertFile, a.cfg.KeyFile); err == nil {
-			s.TLSConfig = &tls.Config{Certificates: []tls.Certificate{cert}, MinVersion: tls.VersionTLS12}
-		} else {
-			log.Printf("TLS disabled: %v", err)
-		}
+	log.Println("Shutting down servers...")
+
+	// Create a deadline for server shutdown
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	// Shutdown HTTP server
+	if err := a.httpServer.Shutdown(ctx); err != nil {
+		log.Printf("HTTP server forced to shutdown: %v\n", err)
 	}
 
-	a.smtpServer = s
+	// Close SMTP server
+	if err := a.smtpServer.Close(); err != nil {
+		log.Printf("SMTP server forced to shutdown: %v\n", err)
+	}
+
+	// Close database connection
+	if err := a.db.Close(); err != nil {
+		log.Printf("Error closing database connection: %v\n", err)
+	}
+
+	log.Println("Servers stopped")
+	return nil
 }

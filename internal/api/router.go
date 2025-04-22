@@ -2,54 +2,41 @@ package api
 
 import (
 	"github.com/gin-gonic/gin"
-
-	"github.com/yourusername/emailserver/internal/app"
 )
 
-/*
-SetupRouter wires every HTTP endpoint exactly as in the
-original monolithic file, only using thin closure wrappers
-so each handler receives the running *app.App instance.
-*/
-func SetupRouter(a *app.App) *gin.Engine {
-	gin.SetMode(gin.ReleaseMode)
+// Router sets up the API routes
+func SetupRouter(handler *Handler, middleware *Middleware) *gin.Engine {
+	router := gin.Default()
 
-	r := gin.New()
-	r.Use(gin.Recovery())
+	// Public routes
+	router.POST("/api/register", handler.HandleUserRegistration)
+	router.POST("/api/login", handler.HandleUserLogin)
+	router.GET("/api/confirm-permission/:token", handler.HandleConfirmPermission)
 
-	/* ---------- public endpoints ---------- */
-	r.POST("/api/register", func(c *gin.Context) { handleUserRegistration(a, c) })
-	r.POST("/api/login", func(c *gin.Context) { handleUserLogin(a, c) })
-	r.GET("/api/confirm-permission/:token",
-		func(c *gin.Context) { handleConfirmPermission(a, c) })
-
-	/* ---------- protected endpoints ---------- */
-	api := r.Group("/api")
-	api.Use(authMiddleware(a))
+	// Protected routes
+	authGroup := router.Group("/api")
+	authGroup.Use(middleware.AuthRequired())
 	{
-		api.POST("/mailboxes", func(c *gin.Context) { handleCreateMailbox(a, c) })
-		api.GET("/mailboxes", func(c *gin.Context) { handleListMailboxes(a, c) })
-		api.GET("/emails/:mailboxId",
-			func(c *gin.Context) { handleListEmails(a, c) })
-		api.GET("/emails/:mailboxId/:emailId",
-			func(c *gin.Context) { handleGetEmail(a, c) })
-		api.DELETE("/emails/:mailboxId/:emailId",
-			func(c *gin.Context) { handleDeleteEmail(a, c) })
-		api.POST("/request-permission",
-			func(c *gin.Context) { handleRequestPermission(a, c) })
-		api.POST("/send", func(c *gin.Context) { handleSendEmail(a, c) })
+		authGroup.POST("/mailboxes", handler.HandleCreateMailbox)
+		authGroup.GET("/mailboxes", handler.HandleListMailboxes)
+		authGroup.GET("/emails/:mailboxId", handler.HandleListEmails)
+		authGroup.GET("/emails/:mailboxId/:emailId", handler.HandleGetEmail)
+		authGroup.DELETE("/emails/:mailboxId/:emailId", handler.HandleDeleteEmail)
+		authGroup.POST("/request-permission", handler.HandleRequestPermission)
+		authGroup.POST("/send-external", handler.HandleSendExternalEmail)
+		authGroup.POST("/send-with-attachment", handler.HandleSendEmailWithAttachment)
+		authGroup.GET("/emails/:mailboxId/:emailId/attachments", handler.HandleGetEmailAttachments)
+		authGroup.GET("/emails/:mailboxId/:emailId/attachments/:attachmentId", handler.HandleDownloadAttachment)
 
-		/* ----- admin sub‑group ----- */
-		admin := api.Group("/admin")
-		admin.Use(adminMiddleware(a))
+		// Admin routes
+		adminGroup := authGroup.Group("/admin")
+		adminGroup.Use(middleware.AdminRequired())
 		{
-			admin.GET("/users", func(c *gin.Context) { handleListUsers(a, c) })
-			admin.POST("/trusted-domains",
-				func(c *gin.Context) { handleAddTrustedDomain(a, c) })
-			admin.DELETE("/trusted-domains/:domain",
-				func(c *gin.Context) { handleRemoveTrustedDomain(a, c) })
+			adminGroup.GET("/users", handler.HandleListUsers)
+			adminGroup.POST("/trusted-domains", handler.HandleAddTrustedDomain)
+			adminGroup.DELETE("/trusted-domains/:domain", handler.HandleRemoveTrustedDomain)
 		}
 	}
 
-	return r
+	return router
 }

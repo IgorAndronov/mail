@@ -2,86 +2,109 @@ package config
 
 import (
 	"fmt"
-	"github.com/spf13/viper"
+	"log"
 	"os"
+	"strings"
+
+	"github.com/spf13/viper"
 )
 
-/* ---------- raw structs (unchanged names) ---------- */
-
-type DBConfig struct {
-	Host, User, Password, DBName, SSLMode string
-	Port                                  int
-}
-
+// Config structure for application configuration
 type Config struct {
-	SMTPHost, WebHost, Domain, JWTSecret, CertFile, KeyFile, EmailStoragePath string
-	SMTPPort, WebPort                                                         int
-	TrustedDomains                                                            []string
-	DB                                                                        DBConfig
+	SMTPHost         string
+	SMTPPort         int
+	WebHost          string
+	WebPort          int
+	Domain           string
+	OwnDomains       []string
+	DB               DBConfig
+	TrustedDomains   []string
+	JWTSecret        string
+	CertFile         string
+	KeyFile          string
+	EmailStoragePath string
+	// DKIM settings
+	DKIMSelector       string
+	DKIMPrivateKeyPath string
 }
 
-/* ---------- loader (logic identical to old loadConfig) ---------- */
+// DBConfig for database connection
+type DBConfig struct {
+	Host     string
+	Port     int
+	User     string
+	Password string
+	DBName   string
+	SSLMode  string
+}
 
-func Load() (Config, error) {
+// LoadConfig loads application configuration from file and environment
+func LoadConfig(configFile string) (Config, error) {
+	// Set up viper
+	v := viper.New()
+	v.SetConfigType("yaml")
 
-	viper.SetDefault("smtp.host", "0.0.0.0")
-	viper.SetDefault("smtp.port", 25)
-	viper.SetDefault("web.host", "0.0.0.0")
-	viper.SetDefault("web.port", 8080)
-	viper.SetDefault("domain", "example.com")
-	viper.SetDefault("db.sslmode", "disable")
-	viper.SetDefault("email_storage_path", "./emails")
+	// Set defaults
+	v.SetDefault("smtp.host", "0.0.0.0")
+	v.SetDefault("smtp.port", 25)
+	v.SetDefault("web.host", "0.0.0.0")
+	v.SetDefault("web.port", 8080)
+	v.SetDefault("domain", "example.com")
+	v.SetDefault("db.sslmode", "disable")
+	v.SetDefault("email_storage_path", "./emails")
 
-	_ = viper.ReadInConfig() // ignore missing config file
+	// If config file is provided, use it
+	if configFile != "" {
+		v.SetConfigFile(configFile)
+	} else {
+		// Otherwise look in default locations
+		v.SetConfigName("config")
+		v.AddConfigPath(".")
+		v.AddConfigPath("./config")
+	}
 
-	c := Config{
-		SMTPHost: viper.GetString("smtp.host"),
-		SMTPPort: viper.GetInt("smtp.port"),
-		WebHost:  viper.GetString("web.host"),
-		WebPort:  viper.GetInt("web.port"),
-		Domain:   viper.GetString("domain"),
+	// Read config
+	if err := v.ReadInConfig(); err != nil {
+		log.Printf("Warning: Could not read config file: %v. Using defaults and environment variables.\n", err)
+	}
+
+	// Check environment variables
+	v.AutomaticEnv()
+	v.SetEnvPrefix("EMAILSERVER")
+	v.SetEnvKeyReplacer(strings.NewReplacer(".", "_"))
+
+	// Parse into config struct
+	config := Config{
+		SMTPHost:   v.GetString("smtp.host"),
+		SMTPPort:   v.GetInt("smtp.port"),
+		WebHost:    v.GetString("web.host"),
+		WebPort:    v.GetInt("web.port"),
+		Domain:     v.GetString("domain"),
+		OwnDomains: v.GetStringSlice("own_domains"),
 		DB: DBConfig{
-			Host:     viper.GetString("db.host"),
-			Port:     viper.GetInt("db.port"),
-			User:     viper.GetString("db.user"),
-			Password: viper.GetString("db.password"),
-			DBName:   viper.GetString("db.name"),
-			SSLMode:  viper.GetString("db.sslmode"),
+			Host:     v.GetString("db.host"),
+			Port:     v.GetInt("db.port"),
+			User:     v.GetString("db.user"),
+			Password: v.GetString("db.password"),
+			DBName:   v.GetString("db.name"),
+			SSLMode:  v.GetString("db.sslmode"),
 		},
-		TrustedDomains:   viper.GetStringSlice("trusted_domains"),
-		JWTSecret:        viper.GetString("jwt_secret"),
-		CertFile:         viper.GetString("tls.cert_file"),
-		KeyFile:          viper.GetString("tls.key_file"),
-		EmailStoragePath: viper.GetString("email_storage_path"),
+		TrustedDomains:   v.GetStringSlice("trusted_domains"),
+		JWTSecret:        v.GetString("jwt_secret"),
+		CertFile:         v.GetString("tls.cert_file"),
+		KeyFile:          v.GetString("tls.key_file"),
+		EmailStoragePath: v.GetString("email_storage_path"),
 	}
 
-	// ---- OVERRIDE WITH ENV VARS (STRICT) ----
-	if v := os.Getenv("EMAILSERVER_DB_HOST"); v != "" {
-		c.DB.Host = v
-	}
-	if v := os.Getenv("EMAILSERVER_DB_PORT"); v != "" {
-		fmt.Sscanf(v, "%d", &c.DB.Port)
-	}
-	if v := os.Getenv("EMAILSERVER_DB_USER"); v != "" {
-		c.DB.User = v
-	}
-	if v := os.Getenv("EMAILSERVER_DB_PASSWORD"); v != "" {
-		c.DB.Password = v
-	}
-	if v := os.Getenv("EMAILSERVER_DB_NAME"); v != "" {
-		c.DB.DBName = v
-	}
-	if v := os.Getenv("EMAILSERVER_DOMAIN"); v != "" {
-		c.Domain = v
-	}
-	if v := os.Getenv("EMAILSERVER_JWT_SECRET"); v != "" {
-		c.JWTSecret = v
+	// If own_domains is empty, default to the main domain
+	if len(config.OwnDomains) == 0 {
+		config.OwnDomains = []string{config.Domain}
 	}
 
-	// ---- CREATE STORAGE PATH DIR ----
-	if err := os.MkdirAll(c.EmailStoragePath, 0o755); err != nil {
-		return Config{}, fmt.Errorf("mkdir email storage: %w", err)
+	// Create email storage directory if it doesn't exist
+	if err := os.MkdirAll(config.EmailStoragePath, 0755); err != nil {
+		return config, fmt.Errorf("failed to create email storage directory: %w", err)
 	}
 
-	return c, nil
+	return config, nil
 }

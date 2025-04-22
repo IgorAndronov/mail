@@ -1,4 +1,3 @@
-
 services:
   emailserver:
     build:
@@ -11,7 +10,8 @@ services:
       - "8080:8080" # Web API port
     volumes:
       - email-data:/var/lib/emailserver/emails
-      - ./config.yaml:/etc/emailserver/config.yaml
+      - attachment-data:/var/lib/emailserver/attachments
+      - ./config/config.yaml:/etc/emailserver/config.yaml
     depends_on:
       - postgres
       - liquibase
@@ -45,7 +45,7 @@ services:
     image: liquibase/liquibase:4.23
     container_name: emailserver-liquibase
     volumes:
-      - ./db:/liquibase/changelog
+      - ./db/migrations:/liquibase/changelog
     networks:
       - email-network
     depends_on:
@@ -56,7 +56,6 @@ services:
       --username=emailserver
       --password=securepassword
       update
-      
 
   adminer:
     image: adminer:latest
@@ -77,3 +76,4 @@ networks:
 volumes:
   postgres-data:
   email-data:
+  attachment-data:

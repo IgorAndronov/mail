@@ -1,51 +1,70 @@
 package api
 
 import (
-	"strings"
-
 	"github.com/gin-gonic/gin"
-	"github.com/golang-jwt/jwt/v5"
-
-	"github.com/yourusername/emailserver/internal/app"
+	"github.com/yourusername/emailserver/internal/auth"
+	"strings"
 )
 
-/* ------------------------------------------------------------------
-   Auth middleware — unchanged
--------------------------------------------------------------------*/
+// Middleware provides API middleware functions
+type Middleware struct {
+	authService *auth.Service
+}
 
-func authMiddleware(a *app.App) gin.HandlerFunc {
+// NewMiddleware creates a new middleware instance
+func NewMiddleware(authService *auth.Service) *Middleware {
+	return &Middleware{
+		authService: authService,
+	}
+}
+
+// AuthRequired ensures the request has a valid JWT token
+func (m *Middleware) AuthRequired() gin.HandlerFunc {
 	return func(c *gin.Context) {
-		h := c.GetHeader("Authorization")
-		parts := strings.SplitN(h, " ", 2)
-		if len(parts) != 2 || parts[0] != "Bearer" {
-			c.AbortWithStatusJSON(401, gin.H{"error": "Authorization header required"})
+		authHeader := c.GetHeader("Authorization")
+		if authHeader == "" {
+			c.JSON(401, gin.H{"error": "Authorization header required"})
+			c.Abort()
 			return
 		}
 
-		token, err := jwt.Parse(parts[1], func(t *jwt.Token) (interface{}, error) {
-			return []byte(a.GetConfig().JWTSecret), nil
-		})
-		if err != nil || !token.Valid {
-			c.AbortWithStatusJSON(401, gin.H{"error": "Invalid token"})
+		// Extract token from Bearer schema
+		tokenParts := strings.Split(authHeader, " ")
+		if len(tokenParts) != 2 || tokenParts[0] != "Bearer" {
+			c.JSON(401, gin.H{"error": "Invalid authorization format"})
+			c.Abort()
 			return
 		}
 
-		claims := token.Claims.(jwt.MapClaims)
-		c.Set("userID", claims["user_id"].(string))
+		// Verify token
+		claims, err := m.authService.VerifyToken(tokenParts[1])
+		if err != nil {
+			c.JSON(401, gin.H{"error": "Invalid token"})
+			c.Abort()
+			return
+		}
+
+		// Set user info in context
+		userID, ok := claims["user_id"].(string)
+		if !ok {
+			c.JSON(401, gin.H{"error": "Invalid token claims"})
+			c.Abort()
+			return
+		}
+
+		c.Set("userID", userID)
 		c.Set("isAdmin", claims["is_admin"].(bool))
 		c.Next()
 	}
 }
 
-/* ------------------------------------------------------------------
-   Admin‑only middleware — NEW
--------------------------------------------------------------------*/
-
-func adminMiddleware(a *app.App) gin.HandlerFunc {
+// AdminRequired ensures the user is an admin
+func (m *Middleware) AdminRequired() gin.HandlerFunc {
 	return func(c *gin.Context) {
-		isAdmin, ok := c.Get("isAdmin")
-		if !ok || !isAdmin.(bool) {
-			c.AbortWithStatusJSON(403, gin.H{"error": "Admin access required"})
+		isAdmin, exists := c.Get("isAdmin")
+		if !exists || !isAdmin.(bool) {
+			c.JSON(403, gin.H{"error": "Admin access required"})
+			c.Abort()
 			return
 		}
 		c.Next()

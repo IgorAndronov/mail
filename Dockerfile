@@ -1,30 +1,25 @@
 # Build stage
 FROM golang:1.21-alpine AS builder
 
-# Set working directory
-WORKDIR /app
-
 # Install build dependencies
 RUN apk add --no-cache git
 
-# Copy go.mod and go.sum first to leverage Docker cache
-COPY go.mod ./
-# Create empty go.sum if it doesn't exist yet
-RUN touch go.sum
-COPY go.sum ./
+# Set working directory
+WORKDIR /app
 
-# Initialize Go modules
-RUN go mod download && go mod verify
+# Copy go.mod and go.sum and download dependencies
+COPY go.mod go.sum ./
+RUN go mod download
 
 # Copy source code
 COPY . .
 
-# Fix potential line ending issues (in case of Windows)
-RUN apk add --no-cache dos2unix \
-    && find . -type f -name "*.go" -exec dos2unix {} \;
+# Fix potential line endings (for Windows users)
+RUN apk add --no-cache dos2unix && \
+    find . -type f -name "*.go" -exec dos2unix {} \;
 
-# Build the application with detailed output
-RUN go build -v -o emailserver .
+# Build the application
+RUN CGO_ENABLED=0 GOOS=linux go build -v -a -installsuffix cgo -o emailserver ./cmd/server
 
 # Final stage
 FROM alpine:3.18
@@ -36,13 +31,16 @@ RUN apk add --no-cache ca-certificates tzdata
 WORKDIR /app
 
 # Create directories
-RUN mkdir -p /var/lib/emailserver/emails /etc/emailserver
+RUN mkdir -p /var/lib/emailserver/emails /var/lib/emailserver/attachments /etc/emailserver
 
 # Copy binary from builder stage
 COPY --from=builder /app/emailserver /app/emailserver
 
 # Copy configuration files
-COPY config.yaml /etc/emailserver/config.yaml
+COPY config/config.yaml /etc/emailserver/config.yaml
+
+# Copy database migrations
+COPY db/migrations /app/db/migrations
 
 # Set environment variables
 ENV EMAILSERVER_CONFIG_FILE=/etc/emailserver/config.yaml

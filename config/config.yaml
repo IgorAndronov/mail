@@ -1,6 +1,6 @@
 # SMTP Server Configuration
 smtp:
-  host: "0.0.0.0"  # Listen on all interfaces
+  host: "127.0.0.1"  # Use localhost for internal connections
   port: 25         # Standard SMTP port
 
 # Web API Configuration
@@ -9,7 +9,13 @@ web:
   port: 8080       # Web API port
 
 # Domain Configuration
-domain: "example.com"  # Your email domain
+domain: "example.com"  # Your primary email domain
+
+# Additional domains managed by this server
+own_domains:
+  - "example.com"
+  - "example.org"
+  - "example.net"
 
 # Database Configuration
 db:
@@ -35,3 +41,8 @@ tls:
 
 # Email Storage Path
 email_storage_path: "/var/lib/emailserver/emails"
+
+# DKIM Configuration
+dkim:
+  selector: "mail"  # DKIM selector
+  private_key_path: "/etc/emailserver/dkim/private.key"
